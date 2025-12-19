@@ -1,78 +1,213 @@
-# Holdem
-poker_ai/  
-├─ README.md  
-├─ requirements.txt  
-├─ run.py                      # 一键入口：训练/评估/对战（命令行参数）  
-│  
-├─ configs/  
-│  ├─ default.yaml             # 盲注、筹码、动作离散、阈值、训练轮数等  
-│  ├─ ablation_no_risk.yaml  
-│  ├─ ablation_no_mode.yaml  
-│  └─ ablation_rl_only.yaml  
-│  
-├─ env/                        # 游戏环境（地基）   
-│  ├─ __init__.py    
-│  ├─ poker_env.py             # 核心：step/reset/legal_actions/reward/terminal    
-│  ├─ rules.py                 # 盲注、下注规则、行动顺序、raise 合法性  
-│  ├─ deck.py                  # Card/Suit/Rank/Deck  
-│  ├─ hand_eval.py             # 手牌评估、胜率/牌力           
-│  └─ state.py                 # GameState 数据结构（dataclass）  
-│  
-├─ features/                   # 感知层：把局面变成特征向量  
-│  ├─ __init__.py  
-│  ├─ extractor.py             # extract_features(state, player_id) -> np.array  
-│  ├─ equity.py                # Monte Carlo equity 近似（可缓存）  
-│  └─ normalizer.py            # pot/stack/SPR 等归一化  
-│  
-├─ opponent/                   # 对手建模（贝叶斯/启发式都放这里）  
-│  ├─ __init__.py  
-│  ├─ profiler.py              # tight/loose/aggressive/passive 分类  
-│  ├─ range_model.py           # 对手范围（初期可用简化分布）  
-│  └─ history.py               # Event 记录与统计  
-│  
-├─ strategy/                   # 策略引擎（EV + RL + 组合逻辑）  
-│  ├─ __init__.py  
-│  ├─ ev_preflop.py            # 翻前 EV(fold/call/raise) 估计  
-│  ├─ rl_flop_qlearn.py        # 翻牌 Q-learning（近似线性Q或tabular）  
-│  ├─ policy_mix.py            # 把 EV/RL 输出合并成 action distribution  
-│  └─ action_space.py          # fold/call/raise + raise sizes 离散定义  
-│  
-├─ risk/                       # 风控层（你的亮点）  
-│  ├─ __init__.py  
-│  ├─ risk_manager.py          # Kelly缩放、drawdown、stop-loss、过滤危险动作  
-│  └─ bankroll.py              # bankroll、最大回撤、Sharpe 等统计  
-│  
-├─ controller/                 # 模式切换控制器（核心创新点）  
-│  ├─ __init__.py  
-│  └─ mode_switch.py           # decide_mode(...) & apply_mode_to_policy(...)  
-│  
-├─ agents/                     # 不同智能体封装（用于 baseline 和消融）  
-│  ├─ __init__.py  
-│  ├─ base_agent.py            # Agent 接口：act(obs)->action  
-│  ├─ random_agent.py  
-│  ├─ rule_tight_aggressive.py  
-│  ├─ ev_only_agent.py  
-│  ├─ rl_only_agent.py  
-│  └─ mode_switch_agent.py     # 你的最终完整系统（调用所有模块）  
-│  
-├─ training/                   # 训练入口（自我对弈）  
-│  ├─ __init__.py  
-│  ├─ self_play.py             # 自我对弈生成数据/更新 Q  
-│  ├─ replay.py                # （可选）缓存 transitions  
-│  └─ schedules.py             # epsilon 衰减、学习率调度  
-│  
-├─ evaluation/                 # 评估入口（TA会看）  
-│  ├─ __init__.py  
-│  ├─ evaluate.py              # 跑N手 vs baselines，输出表格  
-│  ├─ metrics.py               # winrate、BB/100、drawdown、Sharpe  
-│  └─ ablation.py              # 自动跑消融：no_risk/no_mode/no_ev/...  
-│  
-├─ scripts/                    # 小工具  
-│  ├─ quick_sanity.py          # 快速自检（合法动作/奖励/终局）  
-│  ├─ seed_test.py             # 复现性检查  
-│  └─ profile_opponents.py     # 输出对手分类统计  
-│  
-└─ outputs/  
-   ├─ logs/  
-   ├─ models/                  # q_table / weights 存档  
-   └─ reports/                 # 自动导出的结果表格 csv  
+# 模式切换德州扑克 AI（Mode-Switching Poker AI） 
+
+*CS188 风格的混合强化学习课程项目*
+
+---
+
+## 项目简介
+
+本项目实现了一个 **模式切换型德州扑克 AI（Mode-Switching Poker AI）**，运行于一个简化的两街（Preflop + Flop）单挑无限注德州扑克环境中。
+
+德州扑克是一个**不完全信息、高对抗、高方差**的决策问题。
+传统的单一策略（如纯强化学习或固定规则）往往在高风险局面下出现**大额回撤**。
+
+为此，本项目引入了一个**动态模式切换机制**，根据 bankroll 和回撤情况，在两种策略模式之间切换：
+
+* **进攻模式（AGGRESSIVE / Profit Mode）**：剥削性强，追求高期望收益
+* **安全模式（SAFE Mode）**：风险受控，降低波动，避免灾难性亏损
+
+项目目标可以概括为一句话：
+
+> **在有利时赢得更多，在危险时输得更少。**
+
+---
+
+## 游戏环境（简化德州扑克）
+
+* **游戏类型**：单挑（Heads-Up）无限注德州扑克
+* **玩家数**：2
+* **街数**：
+
+  * 翻前（Preflop）
+  * 翻牌（Flop）→ 直接摊牌
+* **盲注**：小盲 1，大盲 2
+* **初始筹码**：100
+* **离散动作空间**：
+
+  * `FOLD`（弃牌）
+  * `CHECK_CALL`（过牌 / 跟注）
+  * `RAISE_1_3_POT`
+  * `RAISE_2_3_POT`
+  * `RAISE_POT`
+  * `ALL_IN`
+
+该环境保留了德州扑克的核心难点：
+
+* 私有信息（底牌）
+* 对抗性下注
+* 风险与收益权衡
+
+同时控制了状态和动作空间，适合课程级强化学习实验。
+
+---
+
+## 项目结构
+
+```
+.
+├── env/
+│   ├── poker_env.py      # 游戏环境（状态、step、reward）
+│   ├── hand_eval.py      # 5 张牌手牌评估
+│
+├── training/
+│   └── self_play.py      # 自博弈 + 表格 Q-learning
+│
+├── agents/
+│   ├── rl_only_agent.py      # 仅强化学习智能体
+│   └── mode_switch_agent.py # 模式切换智能体
+│
+├── controller/
+│   └── mode_switch.py   # 模式切换逻辑（SAFE / AGGRESSIVE）
+│
+├── risk/
+│   └── risk_manager.py  # 风险控制与动作过滤
+│
+├── evaluation/
+│   └── evaluate.py      # 对局评估与统计指标
+│
+├── outputs/
+│   └── models/
+│       └── q_table.pkl  # 训练得到的 Q 表
+│
+└── README.md
+```
+
+---
+
+## 核心思想：模式切换（Mode Switching）
+
+**模式切换控制器**在每个决策点根据以下信息进行判断：
+
+* 当前 bankroll
+* 历史最高 bankroll
+* 当前回撤（drawdown）
+
+并在两种模式之间切换：
+
+### 进攻模式（AGGRESSIVE）
+
+* 允许完整动作空间（包括大额加注、全下）
+* 强剥削性，追求高收益
+* 方差较大，但上限更高
+
+### 安全模式（SAFE）
+
+* 禁止高风险动作（如 ALL-IN、POT 加注）
+* 策略更保守
+* 在回撤较大或风险较高时启用
+
+该机制**简单、可解释、易分析**，是本项目的核心创新点。
+
+---
+
+## 强化学习方法
+
+* **算法**：表格 Q-learning
+* **训练方式**：自博弈（Self-play）
+* **状态编码（离散化）**：
+
+  * 当前街（Preflop / Flop）
+  * 底池大小（分桶）
+  * 自身与对手筹码（分桶）
+  * 需要跟注的筹码
+  * 翻前手牌强度桶
+  * 翻牌后牌型类别
+  * 当前街下注动态（连续 check 次数）
+
+使用 **“轮到我行动”的对称编码**，使得同一张 Q 表可供双方使用。
+
+---
+
+## 训练方法
+
+通过自博弈训练 Q 表：
+
+```bash
+python training/self_play.py \
+  --hands 20000 \
+  --out outputs/models/q_table.pkl
+```
+
+训练过程中会输出 epsilon 衰减和平均步数等信息。
+
+---
+
+## 评估方法
+
+运行不同智能体之间的对局：
+
+```bash
+# 模式切换智能体 vs 紧策略基线
+python evaluation/evaluate.py --p0 mode --p1 tight --hands 5000
+
+# 仅 RL 智能体 vs 随机策略
+python evaluation/evaluate.py --p0 rl --p1 random --hands 5000
+```
+
+### 可用智能体
+
+* `random`：随机策略
+* `tight`：规则型紧策略
+* `rl`：仅强化学习（无模式切换）
+* `mode`：完整模式切换智能体
+
+---
+
+## 评估指标
+
+* 胜率（Win Rate）
+* **BB/100**（每 100 手赢得的大盲数）
+* **最大回撤（Max Drawdown）**
+* 最终 bankroll
+* 摊牌率 / 弃牌率
+* 平均最大底池大小
+
+这些指标同时衡量**盈利能力与风险控制能力**。
+
+---
+
+## 实验结论
+
+实验结果表明：
+
+* 模式切换在不降低收益的情况下，有效控制最大回撤
+* 面对弱对手时，进攻模式能充分剥削
+* 在高风险或极端场景下，安全模式显著提高策略稳定性
+
+验证了本项目的核心假设：
+
+> **动态策略切换可以在保持盈利能力的同时，显著降低风险。**
+
+---
+
+## 与 CS188 的关联
+
+本项目直接关联 CS188 的核心主题：
+
+* 对抗搜索与博弈
+* 马尔可夫决策过程（MDP）
+* 强化学习
+* 不完全信息决策
+* 风险感知策略设计
+
+展示了如何将多种 AI 思想整合到一个统一系统中。
+
+---
+
+## 说明
+
+* 本项目为**课程/研究用途**，非实际博弈软件
+* 游戏环境经过刻意简化，便于分析与学习
+* 可扩展方向包括：更深街数、EV 模块、对手建模等（非必须）
+
+
