@@ -123,6 +123,9 @@ class GameState:
     winner: Optional[int] = None   # 0/1 if terminal by fold or showdown
     # bookkeeping (optional)
     hand_id: int = 0
+    # NEW: counts consecutive CHECK actions in the current street when no bet is outstanding
+    checks_in_row: int = 0
+
 
 # ----------------------------
 # PokerEnv
@@ -248,14 +251,22 @@ class PokerEnv:
         # --- CHECK/CALL ---
         if action == ActionType.CHECK_CALL:
             to_call = s.current_bet - ps.street_commit
+        
             if to_call > 0:
+                # CALL
                 paid = self._pay(ps, to_call)
                 s.pot += paid
                 ps.street_commit += paid
-            # after call, betting may end -> advance street or showdown
+                s.checks_in_row = 0  # call is not a check
+            else:
+                # CHECK
+                s.checks_in_row += 1
+        
+            # after check/call, opponent acts (unless street ends)
             s.to_act = opp
             self._maybe_end_street_after_non_raise()
             return self._transition_and_return(info, p0_before)
+
 
         # --- RAISES (including all-in) ---
         target_commit = self._compute_raise_target_commit(action, p)
@@ -269,6 +280,7 @@ class PokerEnv:
         if ps.street_commit > s.current_bet:
             s.current_bet = ps.street_commit
             s.last_aggressor = p
+            s.checks_in_row = 0
             self._raises_in_street += 1
 
         # after raise, opponent acts
@@ -384,21 +396,27 @@ class PokerEnv:
 
     def _maybe_end_street_after_non_raise(self) -> None:
         """
-        Called after CHECK/CALL. Determine if betting round ends.
-        Simple HU logic:
-        - If both players have equal commits (no one owes to_call) and the last action was a check/call,
-          and either:
-            a) no aggressor in street and both checked (we detect via equality and whose turn), or
-            b) aggressor existed and has been called (equality achieved),
-          then street ends.
+        Called after CHECK/CALL. Determine if the betting round ends.
+    
+        Correct HU logic:
+        - If there was a raise in this street (last_aggressor != None):
+            betting ends only when the raise is called -> commits equalized.
+        - If there was no raise in this street:
+            betting ends only after BOTH players check (two checks in a row).
         """
         s = self._state
         assert s is not None
-        if s.players[0].street_commit != s.players[1].street_commit:
+    
+        # Case 1: someone raised/bet this street -> end only when called (equal commits)
+        if s.last_aggressor is not None:
+            if s.players[0].street_commit == s.players[1].street_commit:
+                self._advance_street_or_showdown()
             return
+    
+        # Case 2: no raises/bets this street -> need both players to check
+        if s.checks_in_row >= 2:
+            self._advance_street_or_showdown()
 
-        # If equalized, street betting is closed.
-        self._advance_street_or_showdown()
 
     def _advance_street_or_showdown(self) -> None:
         s = self._state
@@ -415,6 +433,7 @@ class PokerEnv:
             s.current_bet = 0
             s.last_aggressor = None
             self._raises_in_street = 0
+            s.checks_in_row = 0
 
             # On flop, first to act is BB (non-dealer) in HU
             s.to_act = 1 - s.dealer
