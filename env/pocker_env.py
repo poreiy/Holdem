@@ -18,6 +18,7 @@
 # - more detailed hand equity in features/ layer
 # - opponent modeling outside env
 
+from env.hand_eval import compare_showdown_hands
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -438,7 +439,7 @@ class PokerEnv:
         assert s is not None
         assert s.street == Street.FLOP
         assert len(s.board) == 3
-
+    
         # If any player folded earlier, should already be terminal
         if not s.players[0].in_hand:
             s.done = True
@@ -447,16 +448,29 @@ class PokerEnv:
             s.done = True
             s.winner = 0
         else:
-            # Placeholder winner logic (replace with real evaluator)
-            assert self._deck is not None
-            w = _determine_showdown_winner_rng(self.rng, s.players[0].hole, s.players[1].hole, s.board)
+            # Use real hand evaluator
+            from env.hand_eval import compare_showdown_hands
+    
+            w = compare_showdown_hands(
+                s.players[0].hole,
+                s.players[1].hole,
+                s.board,
+                allow_tie=True
+            )
             s.done = True
-            s.winner = w
-
-        # award pot
-        if s.winner is not None:
+            s.winner = w  # 0/1/None
+    
+        # Award pot (handle tie)
+        if s.winner is None:
+            # Split pot as evenly as possible
+            half = s.pot // 2
+            s.players[0].stack += half
+            s.players[1].stack += (s.pot - half)  # give remainder to player1 deterministically
+        else:
             s.players[s.winner].stack += s.pot
+    
         s.pot = 0
+
 
     def _transition_and_return(self, info: Dict) -> Tuple[GameState, int, bool, Dict]:
         """
