@@ -18,7 +18,6 @@
 # - more detailed hand equity in features/ layer
 # - opponent modeling outside env
 
-from env.hand_eval import compare_showdown_hands
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -107,7 +106,6 @@ class PlayerState:
 
 @dataclass
 class GameState:
-    p0_stack_prev: int = 0
     # public
     street: Street
     board: List[Card]
@@ -125,18 +123,6 @@ class GameState:
     winner: Optional[int] = None   # 0/1 if terminal by fold or showdown
     # bookkeeping (optional)
     hand_id: int = 0
-
-# ----------------------------
-# Hand evaluation (placeholder)
-# ----------------------------
-# IMPORTANT: Keep env independent. You can swap this with a real evaluator later.
-# For now we include a tiny showdown function that returns a random winner if tie.
-# Replace with env/hand_eval.py when ready.
-
-def _determine_showdown_winner_rng(rng: random.Random, p0_hole: List[Card], p1_hole: List[Card], board3: List[Card]) -> int:
-    # Placeholder: RANDOM winner (replace with real evaluation).
-    # This keeps training loop functional before you plug in a real evaluator.
-    return 0 if rng.random() < 0.5 else 1
 
 # ----------------------------
 # PokerEnv
@@ -224,7 +210,6 @@ class PokerEnv:
             done=False,
             winner=None,
             hand_id=self._hand_counter,
-            p0_stack_prev=players[0].stack,
         )
         return self._copy_state()
 
