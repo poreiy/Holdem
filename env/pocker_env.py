@@ -107,6 +107,7 @@ class PlayerState:
 
 @dataclass
 class GameState:
+    p0_stack_prev: int = 0
     # public
     street: Street
     board: List[Card]
@@ -223,6 +224,7 @@ class PokerEnv:
             done=False,
             winner=None,
             hand_id=self._hand_counter,
+            p0_stack_prev=players[0].stack,
         )
         return self._copy_state()
 
@@ -234,6 +236,7 @@ class PokerEnv:
         """
         assert self._state is not None, "Call reset() first."
         s = self._state
+        p0_before = s.players[0].stack
         assert not s.done, "Hand is already done."
 
         p = s.to_act
@@ -255,7 +258,7 @@ class PokerEnv:
             # winner takes pot
             s.players[opp].stack += s.pot
             s.pot = 0
-            return self._finalize_and_return(info)
+            return self._finalize_and_return(info, p0_before)
 
         # --- CHECK/CALL ---
         if action == ActionType.CHECK_CALL:
@@ -267,7 +270,7 @@ class PokerEnv:
             # after call, betting may end -> advance street or showdown
             s.to_act = opp
             self._maybe_end_street_after_non_raise()
-            return self._transition_and_return(info)
+            return self._transition_and_return(info, p0_before)
 
         # --- RAISES (including all-in) ---
         target_commit = self._compute_raise_target_commit(action, p)
@@ -285,7 +288,7 @@ class PokerEnv:
 
         # after raise, opponent acts
         s.to_act = opp
-        return self._transition_and_return(info)
+        return self._transition_and_return(info, p0_before)
 
     def legal_actions(self) -> List[ActionType]:
         """
@@ -472,29 +475,28 @@ class PokerEnv:
         s.pot = 0
 
 
-    def _transition_and_return(self, info: Dict) -> Tuple[GameState, int, bool, Dict]:
+    def _transition_and_return(self, info: Dict, p0_before: int) -> Tuple[GameState, int, bool, Dict]:
         """
-        Computes reward (from player0 perspective) as delta in stack relative to starting_stack.
-        For per-step RL you may prefer 0 until terminal; keep this simple:
-        - reward is 0 until done; terminal reward is (p0_stack - starting_stack).
+        Per-step incremental reward from player0 perspective:
+          reward = p0_after - p0_before
+        Over a whole hand, the sum of step rewards equals final profit/loss.
         """
         s = self._state
         assert s is not None
-
-        reward = 0
-        if s.done:
-            reward = s.players[0].stack - self.starting_stack
-
-        info["p0_stack"] = s.players[0].stack
+    
+        p0_after = s.players[0].stack
+        reward = p0_after - p0_before
+    
+        info["p0_stack"] = p0_after
         info["p1_stack"] = s.players[1].stack
         info["pot"] = s.pot
         info["board"] = list(s.board)
-
+    
         return self._copy_state(), reward, s.done, info
 
-    def _finalize_and_return(self, info: Dict) -> Tuple[GameState, int, bool, Dict]:
+    def _finalize_and_return(self, info: Dict, p0_before: int) -> Tuple[GameState, int, bool, Dict]:
         # fold terminals go here
-        return self._transition_and_return(info)
+        return self._transition_and_return(info, p0_before)
 
     def _copy_state(self) -> GameState:
         # A lightweight deep copy (avoid accidental mutation outside env)
