@@ -1,0 +1,2 @@
+hands,p0_kind,p1_kind,p0_wins,p1_wins,ties,total_p0_profit,avg_p0_profit_per_hand,bb_per_100,max_drawdown,final_bankroll,avg_steps,showdown_rate,fold_rate,avg_peak_pot
+5000,mode,random,654,104,4242,9111,1.822200,91.110000,448,9211,1.818800,0.064000,0.936000,18.240800
